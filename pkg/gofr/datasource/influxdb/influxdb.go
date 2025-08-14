@@ -26,6 +26,13 @@ type Client struct {
 	tracer  trace.Tracer
 }
 
+type influx struct {
+	client       client
+	organization organization
+	bucket       bucket
+	query        query
+}
+
 type HealthInflux struct {
 	URL      string
 	Token    string
@@ -47,6 +54,54 @@ var (
 	errHealthCheckFailed     = errors.New("influxdb health check failed")
 )
 
+// New creates a new InfluxDB client with the provided configuration.
+func New(config Config) *Client {
+	return &Client{
+		config: config,
+	}
+}
+
+func (c *Client) UseLogger(logger any) {
+	if l, ok := logger.(Logger); ok {
+		c.logger = l
+	}
+}
+
+func (c *Client) UseMetrics(metrics any) {
+	if m, ok := metrics.(Metrics); ok {
+		c.metrics = m
+	}
+}
+
+// UseTracer sets the tracer for InfluxDB client.
+func (c *Client) UseTracer(tracer any) {
+	if tracer, ok := tracer.(trace.Tracer); ok {
+		c.tracer = tracer
+	}
+}
+
+// Connect initializes a new InfluxDB client using the configured URL and authentication token.
+// It logs the connection status and performs a health check to verify connectivity.
+//
+// If the health check fails, it logs an error and exits early without returning an error.
+// No parameters or return values.
+func (c *Client) Connect() {
+	c.logger.Debugf("connecting to influxdb at %v", c.config.URL)
+
+	// Create a new client using an InfluxDB server base URL and an authentication token
+	c.client = influxdb2.NewClient(
+		c.config.URL,
+		c.config.Token,
+	)
+
+	if _, err := c.HealthCheck(context.Background()); err != nil {
+		c.logger.Errorf("InfluxDB health check failed: %v", err.Error())
+		return
+	}
+
+	c.logger.Logf("connected to influxdb at : %v", c.config.URL)
+}
+
 // CreateOrganization creates a new organization in InfluxDB with the specified name.
 // It implements the container.InfluxDBProvider interface.
 //
@@ -62,7 +117,7 @@ func (c *Client) CreateOrganization(ctx context.Context, orgName string) (string
 		return "", errEmptyOrganizationName
 	}
 
-	orgAPI := c.client.OrganizationsAPI()
+	orgAPI := NewInfluxdbOrganizationAPI(c.client.OrganizationsAPI())
 	newOrg, err := orgAPI.CreateOrganizationWithName(ctx, orgName)
 
 	if err != nil {
@@ -171,7 +226,6 @@ func (c *Client) DeleteBucket(ctx context.Context, bucketID string) error {
 	if bucketID == "" {
 		return errEmptyBucketID
 	}
-
 	bucketsAPI := c.client.BucketsAPI()
 	if err := bucketsAPI.DeleteBucketWithID(ctx, bucketID); err != nil {
 		return err
@@ -269,7 +323,6 @@ func (c *Client) Ping(ctx context.Context) (bool, error) {
 		c.logger.Errorf("%v", err)
 		return false, err
 	}
-
 	return ping, nil
 }
 
@@ -306,25 +359,6 @@ func (c *Client) Query(ctx context.Context, org, fluxQuery string) ([]map[string
 	return records, nil
 }
 
-func (c *Client) UseLogger(logger any) {
-	if l, ok := logger.(Logger); ok {
-		c.logger = l
-	}
-}
-
-func (c *Client) UseMetrics(metrics any) {
-	if m, ok := metrics.(Metrics); ok {
-		c.metrics = m
-	}
-}
-
-// UseTracer sets the tracer for InfluxDB client.
-func (c *Client) UseTracer(tracer any) {
-	if tracer, ok := tracer.(trace.Tracer); ok {
-		c.tracer = tracer
-	}
-}
-
 func (c *Client) WritePoint(ctx context.Context,
 	org, bucket, measurement string,
 	tags map[string]string, fields map[string]any, timestamp time.Time,
@@ -338,33 +372,4 @@ func (c *Client) WritePoint(ctx context.Context,
 	}
 
 	return nil
-}
-
-// New creates a new InfluxDB client with the provided configuration.
-func New(config Config) *Client {
-	return &Client{
-		config: config,
-	}
-}
-
-// Connect initializes a new InfluxDB client using the configured URL and authentication token.
-// It logs the connection status and performs a health check to verify connectivity.
-//
-// If the health check fails, it logs an error and exits early without returning an error.
-// No parameters or return values.
-func (c *Client) Connect() {
-	c.logger.Debugf("connecting to influxdb at %v", c.config.URL)
-
-	// Create a new client using an InfluxDB server base URL and an authentication token
-	c.client = influxdb2.NewClient(
-		c.config.URL,
-		c.config.Token,
-	)
-
-	if _, err := c.HealthCheck(context.Background()); err != nil {
-		c.logger.Errorf("InfluxDB health check failed: %v", err.Error())
-		return
-	}
-
-	c.logger.Logf("connected to influxdb at : %v", c.config.URL)
 }
